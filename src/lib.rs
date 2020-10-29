@@ -17,6 +17,7 @@ use isahc::{
 use std::path::PathBuf;
 use tracing::{debug, instrument};
 
+pub mod api;
 pub use isahc as http_lib;
 pub mod types;
 
@@ -73,7 +74,7 @@ impl TinystepClient {
 		let req = Request::get(format!("{}/root/{}", base_url, fingerprint))
 			.ssl_options(SslOption::DANGER_ACCEPT_INVALID_CERTS)
 			.body(())?;
-		let resp = isahc::send(req)?.json::<types::HostedSpecificRootResponse>()?;
+		let resp = isahc::send(req)?.json::<types::StepRootResponse>()?;
 
 		let digest = {
 			use openssl::{hash::MessageDigest, x509::X509};
@@ -137,7 +138,10 @@ impl TinystepClient {
 	/// version of smallstep, you can avoid it alltogether with:
 	/// `new_from_hosted`.
 	#[instrument]
-	pub fn new_from_ca_file(base_url: String, ca_bundle: PathBuf) -> Result<Self> {
+	pub fn new_from_ca_file(mut base_url: String, ca_bundle: PathBuf) -> Result<Self> {
+		if base_url.ends_with('/') {
+			base_url.pop();
+		}
 		let http_client = Self::http_client_from_ca_path(ca_bundle)?;
 		let version = Self::get_version(&base_url, &http_client)?;
 
@@ -164,12 +168,15 @@ impl TinystepClient {
 	/// ```rust
 	/// # use tinystep::TinystepClient;
 	/// let my_client = TinystepClient::new_from_fingerprint(
-	///		"https://ssh.bluestone.ca.smallstep.com".to_owned(),
-	///		"0cc9ff5094903449db5abab8a195df4e803c298e92dc9ce821419b7ad6cc35a4",
+	///		"https://certs.bluestone.ca.smallstep.com".to_owned(),
+	///		"6cbbfb8bf28e552bc710af1de6c76ed0defcf184e518b466c4a707a824ac410d",
 	///	).unwrap();
 	/// ```
 	#[instrument]
-	pub fn new_from_fingerprint(base_url: String, fingerprint: &str) -> Result<Self> {
+	pub fn new_from_fingerprint(mut base_url: String, fingerprint: &str) -> Result<Self> {
+		if base_url.ends_with('/') {
+			base_url.pop();
+		}
 		let root_cert_path = Self::get_root_certificate_from_fingerprint(&base_url, fingerprint)?;
 		let http_client = Self::http_client_from_ca_path(root_cert_path)?;
 		let version = Self::get_version(&base_url, &http_client)?;
@@ -199,17 +206,20 @@ impl TinystepClient {
 	/// your team name, and no specific authority, this will default to using
 	/// the only hosted offering of the SSH Authority:
 	///
-	/// ```rust
+	/// ```no_run
 	/// # use tinystep::TinystepClient;
-	/// let my_client = TinystepClient::new_from_hosted("bluestone", None).unwrap();
+	/// let my_client = TinystepClient::new_from_hosted(
+	///   "bluestone",
+	///    None,
+	/// ).unwrap();
 	/// ```
 	///
-	/// If you want you _can_ manually specify it, but there's really no need to
-	/// as of right now:
+	/// If you want you _can_ manually specify an authority, but there's really
+	/// no need to as of right now:
 	///
 	/// ```rust
 	/// # use tinystep::TinystepClient;
-	/// let my_client = TinystepClient::new_from_hosted("bluestone", Some("ssh".to_owned())).unwrap();
+	/// let my_client = TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned())).unwrap();
 	/// ```
 	#[instrument]
 	pub fn new_from_hosted(team_name: &str, specific_authority: Option<String>) -> Result<Self> {
@@ -242,7 +252,10 @@ impl TinystepClient {
 	///
 	/// ```rust
 	/// # use tinystep::TinystepClient;
-	/// let my_client = TinystepClient::new_from_hosted("bluestone", None).unwrap();
+	/// let my_client = TinystepClient::new_from_hosted(
+	///   "bluestone",
+	///   Some("certs".to_owned()),
+	/// ).unwrap();
 	/// let url_to_use = my_client.construct_url("/version");
 	/// // Now I can manually build a request with this url.
 	/// # assert_eq!(url_to_use, "https://certs.bluestone.ca.smallstep.com/version");

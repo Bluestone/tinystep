@@ -15,7 +15,7 @@ pub struct HostedAuthorityResponse {
 /// The JSON Response from calling:
 /// `${smallstep_ca_url}/root/{certificate_fingerprint}`
 #[derive(Clone, Debug, Deserialize)]
-pub struct HostedSpecificRootResponse {
+pub struct StepRootResponse {
 	/// The PEM Encoded Certificate authority file.
 	pub ca: String,
 }
@@ -39,5 +39,7 @@ pub struct StepVersionResponse {
 #[derive(Clone, Debug, Deserialize)]
 pub struct StepHealthResponse {
 	/// The status of this smallstep instance.
+	///
+	/// Currently this is always "ok".
 	pub status: String,
 }
