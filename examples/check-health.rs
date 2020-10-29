@@ -3,7 +3,7 @@ use tinystep::TinystepClient;
 
 pub fn main() -> Result<()> {
 	init_tracing();
-	let client = TinystepClient::new_hosted("bluestone", None)?;
+	let client = TinystepClient::new_from_hosted("bluestone", None)?;
 	println!(
 		"Health is: {:?}",
 		client.get::<tinystep::types::StepHealthResponse>("/health")?

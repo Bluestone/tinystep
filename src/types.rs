@@ -1,3 +1,5 @@
+//! Structs representing the JSON Response types from the smallstep API Server.
+
 use serde::Deserialize;
 
 /// The JSON Response from calling:
