@@ -7,6 +7,83 @@
 //! This library is currently a heavy work in progress, so although there are
 //! no examples here, this is temporary, and we plan to add some here as
 //! the library fills out.
+//!
+//! # Pagination
+//!
+//! There are certain endpoints provided by the smallstep server that are
+//! paginated, and return multiple pages. For every paginated endpoint there
+//! are two sets of methods for each of these endpoints. To explain this, and
+//! show how they differ we will use the list of provisioners for an example.
+//!
+//! So we want to get a list of provisioners, there are two sets of endpoints
+//! provided by tinystep. We'll use the synchronous endpoints for now, so we
+//! we have: `api::provisioners_raw`, and `api::provisioners`.
+//! `api::provisioners_raw` is what you use when you want to manually fetch
+//! a single page, or manually control pagination yourself. In this
+//! example you would manually get all the info you need as an example:
+//!
+//! ```rust
+//! # use tinystep::{api, TinystepClient};
+//! # let my_client = TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned())).unwrap();
+//! let my_page = api::provisioners_raw(None, &my_client).expect("Failed to fetch provisioners.");
+//! println!("Do we have two pages of provisioners? {}", !my_page.next_cursor.is_empty());
+//! ```
+//!
+//! However, this is a bit of a pain for people using this library. Manually
+//! managing pagination while it can be useful, usually means your client
+//! code has to become more convulted in actual usage. For cases where you
+//! don't have some need to manually control pagination, you can use the
+//! `api::provisioners` method which returns an iterator that makes only
+//! the minimum amount of API Calls necessary. Let's take a look:
+//!
+//! ```rust
+//! # use tinystep::{api, TinystepClient};
+//! # let my_client = TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned())).unwrap();
+//! let mut found_provisioner = None;
+//! for resulting_provisioner in api::provisioners(&my_client) {
+//!   let provisioner = resulting_provisioner.unwrap(); // we may have failed
+//!   match provisioner {
+//!     tinystep::types::StepProvisioner::OpenIDConnectProvisioner(provisioner) => {
+//!       if provisioner.name == "GSuite" { found_provisioner = Some(provisioner); break; }
+//!     }
+//!     _ => continue,
+//!   }
+//! }
+//! assert!(found_provisioner.is_some());
+//! ```
+//!
+//! Here if the provisioner named `GSuite` is on page 1, we'll make one API
+//! request. If it's one page 2, we'll make two. Regardless of how many
+//! provisioners there are. You can also use asynchronous functions (we'll
+//! write it a bit differently to show another way of iterating, but
+//! the idea is even asynchronously you can use a stream).
+//!
+//! ```
+//! use futures::stream::{self, StreamExt};
+//! # use tokio_test::block_on;
+//! # use tinystep::{api, TinystepClient};
+//! # let my_client = TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned())).unwrap();
+//!
+//! async fn find_provisioner(
+//!   name: String, client: &TinystepClient
+//! ) -> Option<tinystep::types::StepOIDCProvisioner> {
+//!   let mut stream = api::provisioners_async(client);
+//!   loop {
+//!     let item = stream.next().await;
+//!     if item.is_none() { return None; }
+//!     let resulting_item = item.unwrap();
+//!     if resulting_item.is_err() { panic!("Failed to fetch a page: {:?}", resulting_item); }
+//!     match resulting_item.unwrap() {
+//!       tinystep::types::StepProvisioner::OpenIDConnectProvisioner(prov) => {
+//!         if prov.name == name { return Some(prov); }
+//!       }
+//!       _ => continue,
+//!     }
+//!   }
+//! }
+//!
+//! # assert!(block_on(find_provisioner("GSuite".to_owned(), &my_client)).is_some());
+//! ```
 
 use color_eyre::Result;
 use isahc::{
@@ -54,7 +131,7 @@ pub mod types;
 /// - `TinystepClient` assumes the certificate authority does not rotate.
 ///   If your remote version has a remote certificate authority rotation,
 ///   you will need to create a new tinystep client.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TinystepClient {
 	/// The Base URL for the smallstep client.
 	base_url: String,

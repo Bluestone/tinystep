@@ -4,7 +4,8 @@ use crate::{types::StepRootResponse, TinystepClient};
 use color_eyre::Result;
 use tracing::instrument;
 
-/// Get the root certificate for a particular fingerprint.
+/// `/root/{fingerprint}` - Get the root certificate for a particular
+/// fingerprint.
 ///
 /// Useful when you need to turn a certificate fingerprint/sha
 /// into the actual certificate.
@@ -15,10 +16,11 @@ pub fn for_fingerprint(fingerprint: &str, client: &TinystepClient) -> Result<Ste
 	client.get(&format!("/root/{}", fingerprint))
 }
 
-/// Get the root certificate for a particular fingerprint.
+/// `/root/{fingerprint}` - Get the root certificate for a particular
+/// fingerprint.
 ///
 /// Useful when you need to turn a certificate fingerprint/sha
-/// into the actual certificate.
+/// into the actual certificate, asynchronously.
 #[instrument]
 pub async fn for_fingerprint_async(
 	fingerprint: &str,
