@@ -1,9 +1,26 @@
 use color_eyre::Result;
+use std::{env::args as arg_iter, path::PathBuf};
 use tinystep::TinystepClient;
 
 pub fn main() -> Result<()> {
 	init_tracing();
-	let client = TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned()))?;
+	let args = arg_iter().collect::<Vec<String>>();
+	let client = if args.len() == 3 || args.len() == 4 {
+		println!("Using Client Identity!");
+		TinystepClient::new_from_hosted_with_identity(
+			"bluestone",
+			Some("certs".to_owned()),
+			PathBuf::from(args.get(1).unwrap()),
+			PathBuf::from(args.get(2).unwrap()),
+			if args.len() == 3 {
+				None
+			} else {
+				Some(args[3].to_owned())
+			},
+		)?
+	} else {
+		TinystepClient::new_from_hosted("bluestone", Some("certs".to_owned()))?
+	};
 	println!("Health is: {:?}", tinystep::api::health(&client)?,);
 	Ok(())
 }

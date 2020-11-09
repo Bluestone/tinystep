@@ -87,7 +87,7 @@
 
 use color_eyre::Result;
 use isahc::{
-	config::{CaCertificate, SslOption},
+	config::{CaCertificate, ClientCertificate, PrivateKey, SslOption},
 	prelude::*,
 	HttpClient, ResponseExt,
 };
@@ -131,6 +131,10 @@ pub mod types;
 /// - `TinystepClient` assumes the certificate authority does not rotate.
 ///   If your remote version has a remote certificate authority rotation,
 ///   you will need to create a new tinystep client.
+///
+/// - If using a hosted version of smallstep, you will need to provide an
+///   identity in order to access certain endpoints, such as `/roots`.
+///   You can call these with: `new_from_<method>_with_identity`.
 #[derive(Clone, Debug)]
 pub struct TinystepClient {
 	/// The Base URL for the smallstep client.
@@ -186,14 +190,25 @@ impl TinystepClient {
 
 	/// Construct a HTTP Client from the base URL, and the path to the
 	/// certificate authority.
-	fn http_client_from_ca_path(path: PathBuf) -> Result<HttpClient> {
-		Ok(HttpClient::builder()
+	fn http_client_from_certs(
+		ca_path: PathBuf,
+		client_path: Option<(PathBuf, (PathBuf, Option<String>))>,
+	) -> Result<HttpClient> {
+		let mut bldr = HttpClient::builder()
 			.default_headers(&[(
 				"user-agent",
 				concat!("tinystep/", env!("CARGO_PKG_VERSION")),
 			)])
-			.ssl_ca_certificate(CaCertificate::file(path))
-			.build()?)
+			.ssl_ca_certificate(CaCertificate::file(ca_path));
+
+		if let Some(cert_pair) = client_path {
+			bldr = bldr.ssl_client_certificate(ClientCertificate::pem_file(
+				cert_pair.0,
+				Some(PrivateKey::pem_file((cert_pair.1).0, (cert_pair.1).1)),
+			));
+		}
+
+		Ok(bldr.build()?)
 	}
 
 	/// Get the version for a smallstep instance.
@@ -219,7 +234,46 @@ impl TinystepClient {
 		if base_url.ends_with('/') {
 			base_url.pop();
 		}
-		let http_client = Self::http_client_from_ca_path(ca_bundle)?;
+		let http_client = Self::http_client_from_certs(ca_bundle, None)?;
+		let version = Self::get_version(&base_url, &http_client)?;
+
+		Ok(Self {
+			base_url,
+			remote_version: version.version,
+			underlying_http_client: http_client,
+		})
+	}
+
+	/// Connect to any smallstep instance, with a client identity.
+	///
+	/// This is a common method you will use for connecting to
+	/// smallstep instances. Here simply specify the certificate-authority
+	/// of the smallstep instance. This will be not only what smallstep serves
+	/// https on, but also what all the certificates are signed by.
+	///
+	/// Next specify the client certificate identity to use when connecting to
+	/// smallstep instance. This will be a PEM encoded cert/key path, along with
+	/// an optional password for the key.
+	///
+	/// If transporting around the ca file is too much of a pain, you
+	/// can look at: `new_from_fingerprint`, and if you're running a hosted
+	/// version of smallstep, you can avoid it alltogether with:
+	/// `new_from_hosted`.
+	#[instrument]
+	pub fn new_from_ca_file_with_identity(
+		mut base_url: String,
+		ca_bundle: PathBuf,
+		client_cert_path: PathBuf,
+		client_key_path: PathBuf,
+		client_pass: Option<String>,
+	) -> Result<Self> {
+		if base_url.ends_with('/') {
+			base_url.pop();
+		}
+		let http_client = Self::http_client_from_certs(
+			ca_bundle,
+			Some((client_cert_path, (client_key_path, client_pass))),
+		)?;
 		let version = Self::get_version(&base_url, &http_client)?;
 
 		Ok(Self {
@@ -255,7 +309,47 @@ impl TinystepClient {
 			base_url.pop();
 		}
 		let root_cert_path = Self::get_root_certificate_from_fingerprint(&base_url, fingerprint)?;
-		let http_client = Self::http_client_from_ca_path(root_cert_path)?;
+		let http_client = Self::http_client_from_certs(root_cert_path, None)?;
+		let version = Self::get_version(&base_url, &http_client)?;
+
+		Ok(Self {
+			base_url,
+			remote_version: version.version,
+			underlying_http_client: http_client,
+		})
+	}
+
+	/// Connect to any smallstep instance with only the CA fingerprint, and a
+	/// client identity.
+	///
+	/// This can be useful in environments, where transporting around the
+	/// CA you should be trusting proves difficult. If you don't want to
+	/// distribute the certificate file to all your nodes who may be using
+	/// smallstep. You can instead transport around the fingerprint of the
+	/// certificate.
+	///
+	/// Next specify the client certificate identity to use when connecting to
+	/// smallstep instance. This will be a PEM encoded cert/key path, along with
+	/// an optional password for the key.
+	///
+	/// We will fetch the actual certificate authority from smallstep, validating
+	/// it against the fingerprint to ensure we're talking to the correct party.
+	#[instrument]
+	pub fn new_from_fingerprint_with_identity(
+		mut base_url: String,
+		fingerprint: &str,
+		client_cert_path: PathBuf,
+		client_key_path: PathBuf,
+		client_pass: Option<String>,
+	) -> Result<Self> {
+		if base_url.ends_with('/') {
+			base_url.pop();
+		}
+		let root_cert_path = Self::get_root_certificate_from_fingerprint(&base_url, fingerprint)?;
+		let http_client = Self::http_client_from_certs(
+			root_cert_path,
+			Some((client_cert_path, (client_key_path, client_pass))),
+		)?;
 		let version = Self::get_version(&base_url, &http_client)?;
 
 		Ok(Self {
@@ -308,7 +402,52 @@ impl TinystepClient {
 		.json::<types::HostedAuthorityResponse>()?;
 		let root_cert_path =
 			Self::get_root_certificate_from_fingerprint(&resp.url, &resp.fingerprint)?;
-		let http_client = Self::http_client_from_ca_path(root_cert_path)?;
+		let http_client = Self::http_client_from_certs(root_cert_path, None)?;
+		let version = Self::get_version(&resp.url, &http_client)?;
+
+		Ok(Self {
+			base_url: resp.url,
+			remote_version: version.version,
+			underlying_http_client: http_client,
+		})
+	}
+
+	/// Create a client for interacting with a hosted version of smallstep, with
+	/// a client identity.
+	///
+	/// If you are paying for smallstep's hosted SSH Authority, or another
+	/// hosted service, this method should allow you to construct a client
+	/// from only your team name. By default this assumes you're using
+	/// the hosted SSH product, since that's all that is offered, but in the
+	/// future you'll be able to override this with the `specific_authority`
+	/// argument.
+	///
+	/// Next specify the client certificate identity to use when connecting to
+	/// smallstep instance. This will be a PEM encoded cert/key path, along with
+	/// an optional password for the key.
+	///
+	/// The teamname is the same you go to when you login at:
+	/// `https://smallstep.com/app/${ this is your team name }`
+	#[instrument]
+	pub fn new_from_hosted_with_identity(
+		team_name: &str,
+		specific_authority: Option<String>,
+		client_cert_path: PathBuf,
+		client_key_path: PathBuf,
+		client_pass: Option<String>,
+	) -> Result<Self> {
+		let resp = isahc::get(format!(
+			"https://api.smallstep.com/v1/teams/{}/authorities/{}",
+			team_name,
+			specific_authority.unwrap_or_else(|| "ssh".to_owned())
+		))?
+		.json::<types::HostedAuthorityResponse>()?;
+		let root_cert_path =
+			Self::get_root_certificate_from_fingerprint(&resp.url, &resp.fingerprint)?;
+		let http_client = Self::http_client_from_certs(
+			root_cert_path,
+			Some((client_cert_path, (client_key_path, client_pass))),
+		)?;
 		let version = Self::get_version(&resp.url, &http_client)?;
 
 		Ok(Self {
